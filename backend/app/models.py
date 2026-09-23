@@ -322,7 +322,10 @@ class ProjectDailyReport(Base):
     __tablename__ = "project_daily_reports"
     __table_args__ = (
         UniqueConstraint(
-            "project_id", "report_date", name="uq_project_daily_reports_project_date"
+            "project_id",
+            "report_date",
+            "user_id",
+            name="uq_project_daily_reports_project_date_user",
         ),
     )
 
@@ -335,9 +338,18 @@ class ProjectDailyReport(Base):
     project_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
     )
+    # Author of this personal daily report (unique with project_id + report_date)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
     report_date: Mapped[date] = mapped_column(Date, nullable=False)
     summary_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     next_actions: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # draft until member marks 完成/同步; then owner can see it in the team list
+    status: Mapped[str] = mapped_column(String, nullable=False, default="draft")
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     completion_percent: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     day_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_by_user_id: Mapped[uuid.UUID] = mapped_column(
