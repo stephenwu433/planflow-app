@@ -25,7 +25,17 @@ import {
   type SeedMode,
   type WorkItemStatus,
 } from "@/lib/cycle-schedule-api";
-import { listMembers, updateMemberJobTitle, jobTitleLabel, type TeamMember } from "@/lib/members-api";
+import {
+  assigneeLabelForId,
+  assigneeOptionLabel,
+  type AssigneeOption,
+} from "@/lib/assignee-label";
+import {
+  listMembers,
+  updateMemberJobTitle,
+  jobTitleLabel,
+  type TeamMember,
+} from "@/lib/members-api";
 import {
   listProjectMembers,
   type ProjectMember,
@@ -41,32 +51,6 @@ const STATUS_LABELS: Record<WorkItemStatus, string> = {
   doing: "进行中",
   done: "已完成",
 };
-
-type AssigneeOption = {
-  user_id: string;
-  display_name: string | null;
-  email: string | null;
-  clerk_user_id?: string | null;
-  job_title?: string | null;
-};
-
-function assigneeDisplayName(m: AssigneeOption): string {
-  const name = m.display_name?.trim();
-  if (name) return name;
-  const email = m.email?.trim();
-  if (email) return email;
-  const clerk = m.clerk_user_id?.trim();
-  if (clerk) return clerk;
-  return `成员 ${m.user_id.slice(0, 8)}`;
-}
-
-function assigneeOptionLabel(m: AssigneeOption): string {
-  const name = assigneeDisplayName(m);
-  if (!m.job_title) return name;
-  const job = jobTitleLabel(m.job_title);
-  if (!job || job === "未设置岗位") return name;
-  return `${name}（${job}）`;
-}
 
 export default function ProjectCycleSchedulePage() {
   const { isLoaded, isSignedIn, getToken } = useAuth();
@@ -486,13 +470,12 @@ export default function ProjectCycleSchedulePage() {
   }
 
   function memberLabel(userId: string | null) {
-    if (!userId) return "未指派";
-    const m =
-      assignees.find((x) => x.user_id === userId) ||
-      members.find((x) => x.user_id === userId) ||
-      projectMembers.find((x) => x.user_id === userId);
-    if (!m) return `未知成员（${userId.slice(0, 8)}）`;
-    return assigneeOptionLabel(m);
+    const pool: AssigneeOption[] = [
+      ...assignees,
+      ...members,
+      ...projectMembers,
+    ];
+    return assigneeLabelForId(userId, pool);
   }
 
   const empty = !loading && schedule && schedule.phase_count === 0;
