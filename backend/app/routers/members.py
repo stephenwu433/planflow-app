@@ -13,12 +13,12 @@ from app.auth import get_current_user
 from app.db import get_db
 from app.membership import require_team_manager, require_team_membership
 from app.models import Team, TeamInvite, TeamMember, User
+from app.job_titles import normalize_job_title
 from app.schemas import (
     InviteCreateRequest,
     InviteListResponse,
     InvitePreviewResponse,
     InviteResponse,
-    JOB_TITLES,
     TeamMemberListResponse,
     TeamMemberResponse,
     TeamMemberUpdateRequest,
@@ -99,16 +99,7 @@ def update_member(
     if body.clear_job_title:
         member.job_title = None
     elif body.job_title is not None:
-        job = body.job_title.strip().lower()
-        if job == "":
-            member.job_title = None
-        elif job not in JOB_TITLES:
-            raise HTTPException(
-                status_code=400,
-                detail=f"job_title must be one of: {', '.join(JOB_TITLES)}",
-            )
-        else:
-            member.job_title = job
+        member.job_title = normalize_job_title(body.job_title)
 
     if body.display_name is not None:
         name = body.display_name.strip()

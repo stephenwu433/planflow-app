@@ -16,6 +16,7 @@ from typing import Any
 
 import httpx
 
+from app.job_titles import coerce_suggested_job, is_preset_job_title, job_title_label
 from app.schemas import DEFAULT_PHASE_NAMES, JOB_TITLES
 
 
@@ -82,7 +83,11 @@ def analyze_requirements_to_schedule(
     if not key:
         raise RuntimeError("AI API key is not configured")
 
-    jobs = [j for j in available_jobs if j in JOB_TITLES] or list(JOB_TITLES)
+    # Keep roster titles (presets + custom). Fall back to presets if roster empty.
+    jobs = [j for j in available_jobs if (j or "").strip()] or list(JOB_TITLES)
+    job_hints = [
+        f"{j}（{job_title_label(j)}）" if is_preset_job_title(j) else j for j in jobs
+    ]
     phase_names = list(DEFAULT_PHASE_NAMES)
     req_block = "\n".join(f"- {r}" for r in requirements) or "- （未提供细分需求，请根据项目目标拆解）"
 
@@ -92,7 +97,7 @@ def analyze_requirements_to_schedule(
         "{"
         '"analysis":"一两句中文分析",'
         '"phases":[{"name":"阶段名","work_items":[{"title":"任务标题",'
-        '"estimated_hours":数字,"suggested_job":"岗位英文key或null"}]}]'
+        '"estimated_hours":数字,"suggested_job":"岗位英文key或自定义岗位名或null"}]}]'
         "}\n"
         f"phases 必须正好 {len(phase_names)} 个，且 name 依次为：{phase_names}。"
         f"suggested_job 只能是这些之一或 null：{jobs}。"
@@ -106,7 +111,7 @@ def analyze_requirements_to_schedule(
         f"计划开始：{planned_start}\n"
         f"计划结束：{planned_end}\n"
         f"成员每日可用工时：{member_daily_hours}\n"
-        f"可用岗位：{', '.join(jobs)}\n"
+        f"可用岗位：{', '.join(job_hints)}\n"
         f"需求条目：\n{req_block}\n"
         "请分析并生成排期 JSON。"
     )
@@ -166,9 +171,10 @@ def analyze_requirements_to_schedule(
                 hours = 2.0
             hours = max(0.5, min(hours, 40.0))
             job = item.get("suggested_job")
-            job_s = str(job).strip().lower() if job else None
-            if job_s and job_s not in JOB_TITLES:
-                job_s = None
+            job_s = coerce_suggested_job(
+                str(job) if job is not None else None,
+                available_jobs=jobs,
+            )
             by_name[name].append(
                 AIWorkItem(title=title[:200], estimated_hours=hours, suggested_job=job_s)
             )

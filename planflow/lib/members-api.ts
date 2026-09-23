@@ -12,6 +12,11 @@ export type JobTitle =
   | "ops"
   | "other";
 
+/** Sentinel value for the "自定义" select option (not persisted). */
+export const CUSTOM_JOB_TITLE_VALUE = "__custom__";
+
+export const JOB_TITLE_MAX_LENGTH = 40;
+
 export const JOB_TITLE_LABELS: Record<JobTitle, string> = {
   project_manager: "项目经理",
   pm: "产品经理",
@@ -19,6 +24,31 @@ export const JOB_TITLE_LABELS: Record<JobTitle, string> = {
   ops: "运营",
   other: "其他",
 };
+
+export const JOB_TITLE_PRESET_KEYS = Object.keys(
+  JOB_TITLE_LABELS,
+) as JobTitle[];
+
+export function isPresetJobTitle(
+  job: string | null | undefined,
+): job is JobTitle {
+  return !!job && job in JOB_TITLE_LABELS;
+}
+
+/** Chinese label for presets; raw string for custom titles. */
+export function jobTitleLabel(job: string | null | undefined): string {
+  if (!job) return "未设置岗位";
+  return isPresetJobTitle(job) ? JOB_TITLE_LABELS[job] : job;
+}
+
+/** Select control value: preset key, empty, or custom sentinel. */
+export function jobTitleSelectValue(
+  job: string | null | undefined,
+): string {
+  if (!job) return "";
+  if (isPresetJobTitle(job)) return job;
+  return CUSTOM_JOB_TITLE_VALUE;
+}
 
 export type TeamMember = {
   user_id: string;

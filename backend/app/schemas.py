@@ -49,6 +49,7 @@ class TeamMemberListResponse(BaseModel):
     members: list[TeamMemberResponse]
 
 
+# Preset job-title keys (quick-pick options). Custom free-text titles are also allowed.
 JOB_TITLES = (
     "project_manager",
     "pm",

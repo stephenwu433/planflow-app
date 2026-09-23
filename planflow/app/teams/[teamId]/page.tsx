@@ -11,11 +11,10 @@ import {
   listMembers,
   updateMemberDisplayName,
   updateMemberJobTitle,
-  JOB_TITLE_LABELS,
   type Invite,
-  type JobTitle,
   type TeamMember,
 } from "@/lib/members-api";
+import { JobTitlePicker } from "@/components/JobTitlePicker";
 import {
   createProject,
   listTeamProjects,
@@ -386,10 +385,10 @@ function TeamProjectsPanel({ teamId }: { teamId: string }) {
                     </span>
                   )}
                 </div>
-                <select
-                  value={m.job_title || ""}
+                <JobTitlePicker
+                  value={m.job_title}
                   disabled={saving}
-                  onChange={async (e) => {
+                  onSave={async (jobTitle) => {
                     setSaving(true);
                     setError(null);
                     try {
@@ -399,7 +398,7 @@ function TeamProjectsPanel({ teamId }: { teamId: string }) {
                         token,
                         teamId,
                         m.user_id,
-                        e.target.value || null,
+                        jobTitle,
                       );
                       setMembers((prev) =>
                         prev.map((x) =>
@@ -414,15 +413,7 @@ function TeamProjectsPanel({ teamId }: { teamId: string }) {
                       setSaving(false);
                     }
                   }}
-                  className="rounded-md border border-zinc-300 px-2 py-1 text-xs"
-                >
-                  <option value="">未设置岗位</option>
-                  {(Object.keys(JOB_TITLE_LABELS) as JobTitle[]).map((key) => (
-                    <option key={key} value={key}>
-                      {JOB_TITLE_LABELS[key]}
-                    </option>
-                  ))}
-                </select>
+                />
               </li>
             ))}
           </ul>
