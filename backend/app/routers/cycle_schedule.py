@@ -581,6 +581,7 @@ def _clear_schedule(db: Session, project_id: uuid.UUID) -> None:
 
 
 def _sync_linked_task(db: Session, item: PhaseWorkItem) -> None:
+    """Push schedule work-item fields onto the linked Task (assignee included)."""
     if item.task_id is None:
         return
     task = db.query(Task).filter(Task.id == item.task_id).one_or_none()
@@ -590,7 +591,11 @@ def _sync_linked_task(db: Session, item: PhaseWorkItem) -> None:
     task.title = item.title
     task.status = item.status if item.status in PHASE_WORK_ITEM_STATUSES else task.status
     task.assignee_user_id = item.assignee_user_id
-    if item.planned_end is not None:
+    task.estimated_hours = float(item.estimated_hours or 0.0)
+    # Prefer planned_start (expand-daily pins the primary day there).
+    if item.planned_start is not None:
+        task.due_date = item.planned_start
+    elif item.planned_end is not None:
         task.due_date = item.planned_end
 
 
@@ -992,6 +997,10 @@ def create_work_item(
         sort_order=sort_order,
     )
     db.add(item)
+    db.flush()
+    # If the new row links an existing task, push assignee/title onto that task
+    # so 「当日任务」 does not keep showing 未指派.
+    _sync_linked_task(db, item)
     project.plan_confirmed = False
     db.commit()
     db.refresh(item)
