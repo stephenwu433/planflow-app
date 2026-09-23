@@ -6,12 +6,12 @@ import { useParams, useRouter } from "next/navigation";
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 
 import { WorkbenchShell } from "@/components/WorkbenchShell";
+import { JobTitlePicker } from "@/components/JobTitlePicker";
 import { generateCycleSchedule } from "@/lib/cycle-schedule-api";
 import {
   listMembers,
   updateMemberDisplayName,
-  JOB_TITLE_LABELS,
-  type JobTitle,
+  jobTitleLabel,
   type TeamMember,
 } from "@/lib/members-api";
 import {
@@ -71,7 +71,7 @@ export default function ProjectTasksPage() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [memberBusy, setMemberBusy] = useState(false);
   const [addUserId, setAddUserId] = useState("");
-  const [addJobTitle, setAddJobTitle] = useState<JobTitle | "">("");
+  const [addJobTitle, setAddJobTitle] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
 
   const [settingsName, setSettingsName] = useState("");
@@ -336,7 +336,7 @@ export default function ProjectTasksPage() {
     }
   }
 
-  async function onUpdateMemberJob(userId: string, jobTitle: string) {
+  async function onUpdateMemberJob(userId: string, jobTitle: string | null) {
     setMemberBusy(true);
     setError(null);
     try {
@@ -646,22 +646,15 @@ export default function ProjectTasksPage() {
                   </label>
                   <label className="flex flex-1 flex-col gap-1 text-xs text-zinc-500">
                     岗位
-                    <select
-                      value={addJobTitle}
-                      onChange={(e) =>
-                        setAddJobTitle(e.target.value as JobTitle | "")
-                      }
-                      className="rounded-md border border-zinc-300 px-3 py-2 text-sm text-zinc-900"
-                    >
-                      <option value="">未指定</option>
-                      {(Object.keys(JOB_TITLE_LABELS) as JobTitle[]).map(
-                        (key) => (
-                          <option key={key} value={key}>
-                            {JOB_TITLE_LABELS[key]}
-                          </option>
-                        ),
-                      )}
-                    </select>
+                    <JobTitlePicker
+                      value={addJobTitle || null}
+                      disabled={memberBusy}
+                      emptyLabel="未指定"
+                      selectClassName="rounded-md border border-zinc-300 px-3 py-2 text-sm text-zinc-900"
+                      onSave={(jobTitle) => {
+                        setAddJobTitle(jobTitle || "");
+                      }}
+                    />
                   </label>
                   <button
                     type="submit"
@@ -689,30 +682,20 @@ export default function ProjectTasksPage() {
                           </p>
                           <p className="text-xs text-zinc-500">
                             {m.job_title_label ||
-                              (m.job_title
-                                ? JOB_TITLE_LABELS[m.job_title as JobTitle] ||
-                                  m.job_title
-                                : "未设岗位")}
+                              jobTitleLabel(m.job_title) ||
+                              "未设岗位"}
                           </p>
                         </div>
                         <div className="flex items-center gap-2">
-                          <select
-                            value={m.job_title || ""}
+                          <JobTitlePicker
+                            value={m.job_title}
                             disabled={memberBusy}
-                            onChange={(e) =>
-                              void onUpdateMemberJob(m.user_id, e.target.value)
+                            emptyLabel="未指定"
+                            selectClassName="rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-sm disabled:opacity-50"
+                            onSave={(jobTitle) =>
+                              void onUpdateMemberJob(m.user_id, jobTitle)
                             }
-                            className="rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-sm disabled:opacity-50"
-                          >
-                            <option value="">未指定</option>
-                            {(Object.keys(JOB_TITLE_LABELS) as JobTitle[]).map(
-                              (key) => (
-                                <option key={key} value={key}>
-                                  {JOB_TITLE_LABELS[key]}
-                                </option>
-                              ),
-                            )}
-                          </select>
+                          />
                           <button
                             type="button"
                             disabled={memberBusy}

@@ -7,28 +7,17 @@ import uuid
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from app.job_titles import job_title_label, normalize_job_title
 from app.models import ProjectMember, TeamMember
-from app.schemas import JOB_TITLES, JOB_TITLE_LABELS_ZH
 
-
-def normalize_job_title(raw: str | None) -> str | None:
-    if raw is None:
-        return None
-    value = raw.strip().lower()
-    if not value:
-        return None
-    if value not in JOB_TITLES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"job_title must be one of: {', '.join(JOB_TITLES)}",
-        )
-    return value
-
-
-def job_title_label(job: str | None) -> str | None:
-    if not job:
-        return None
-    return JOB_TITLE_LABELS_ZH.get(job, job)
+# Re-export for existing imports.
+__all__ = [
+    "ensure_project_member",
+    "job_title_label",
+    "list_project_job_titles",
+    "normalize_job_title",
+    "require_project_assignee",
+]
 
 
 def ensure_project_member(
@@ -123,8 +112,15 @@ def list_project_job_titles(db: Session, *, project_id: uuid.UUID) -> list[str]:
         .all()
     )
     seen: list[str] = []
+    seen_lower: set[str] = set()
     for (job,) in rows:
-        j = (job or "").strip().lower()
-        if j and j not in seen:
-            seen.append(j)
+        j = (job or "").strip()
+        if not j:
+            continue
+        key = j.lower()
+        if key in seen_lower:
+            continue
+        seen_lower.add(key)
+        # Preserve original casing for custom titles; presets are already lowercase.
+        seen.append(j)
     return seen

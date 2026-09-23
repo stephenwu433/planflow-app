@@ -364,10 +364,16 @@ def _team_job_titles(db: Session, *, team_id: uuid.UUID) -> list[str]:
         .all()
     )
     seen: list[str] = []
+    seen_lower: set[str] = set()
     for (job,) in rows:
-        j = (job or "").strip().lower()
-        if j and j not in seen:
-            seen.append(j)
+        j = (job or "").strip()
+        if not j:
+            continue
+        key = j.lower()
+        if key in seen_lower:
+            continue
+        seen_lower.add(key)
+        seen.append(j)
     return seen
 
 
@@ -1587,14 +1593,26 @@ def _job_fallback_chain(job: str, *, available: set[str]) -> list[str]:
         "ops": ["ops", "pm", "project_manager", "other"],
         "other": ["other", "pm", "ops", "designer"],
     }
-    ordered = chains.get(normalized, ["pm", "ops", "designer", "other"])
+    # Custom / unknown titles: try exact match first, then other, then presets.
+    ordered = chains.get(
+        normalized,
+        [normalized, "other", "pm", "ops", "designer", "project_manager"],
+    )
     if available:
         # Allow legacy DB titles to still receive work if present
         expanded_available = set(available)
         for leg in legacy:
             if leg in available:
                 expanded_available.add("other")
-        filtered = [j for j in ordered if j in expanded_available]
+        # Case-insensitive match for custom English titles in pools.
+        available_lower = {j.lower(): j for j in expanded_available}
+        filtered: list[str] = []
+        seen: set[str] = set()
+        for j in ordered:
+            match = j if j in expanded_available else available_lower.get(j.lower())
+            if match and match not in seen:
+                filtered.append(match)
+                seen.add(match)
         if filtered:
             return filtered
         return list(available)
@@ -1612,7 +1630,7 @@ def _load_job_pools(
     )
     pools: dict[str, list[uuid.UUID]] = {}
     for member in rows:
-        job = (member.job_title or "").strip().lower()
+        job = (member.job_title or "").strip()
         if not job:
             continue
         pools.setdefault(job, []).append(member.user_id)

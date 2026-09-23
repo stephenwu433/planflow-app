@@ -25,10 +25,11 @@ import {
   type SeedMode,
   type WorkItemStatus,
 } from "@/lib/cycle-schedule-api";
-import { listMembers, updateMemberJobTitle, JOB_TITLE_LABELS, type JobTitle, type TeamMember } from "@/lib/members-api";
+import { listMembers, updateMemberJobTitle, jobTitleLabel, type TeamMember } from "@/lib/members-api";
 import { listTeamProjects } from "@/lib/projects-api";
 import { listTasks, type Task } from "@/lib/tasks-api";
 import { listMyTeams } from "@/lib/teams-api";
+import { JobTitlePicker } from "@/components/JobTitlePicker";
 import { WorkbenchShell } from "@/components/WorkbenchShell";
 
 const STATUS_LABELS: Record<WorkItemStatus, string> = {
@@ -198,7 +199,7 @@ export default function ProjectCycleSchedulePage() {
     }
   }
 
-  async function onSetMemberJob(userId: string, jobTitle: string) {
+  async function onSetMemberJob(userId: string, jobTitle: string | null) {
     setBusy(true);
     setError(null);
     try {
@@ -682,23 +683,13 @@ export default function ProjectCycleSchedulePage() {
                             <span className="text-zinc-800">
                               {m.display_name || m.email || m.clerk_user_id}
                             </span>
-                            <select
-                              value={m.job_title || ""}
+                            <JobTitlePicker
+                              value={m.job_title}
                               disabled={busy}
-                              onChange={(e) =>
-                                void onSetMemberJob(m.user_id, e.target.value)
+                              onSave={(jobTitle) =>
+                                void onSetMemberJob(m.user_id, jobTitle)
                               }
-                              className="rounded-md border border-zinc-300 px-2 py-1 text-xs"
-                            >
-                              <option value="">未设置岗位</option>
-                              {(Object.keys(JOB_TITLE_LABELS) as JobTitle[]).map(
-                                (key) => (
-                                  <option key={key} value={key}>
-                                    {JOB_TITLE_LABELS[key]}
-                                  </option>
-                                ),
-                              )}
-                            </select>
+                            />
                           </li>
                         ))}
                       </ul>
@@ -903,15 +894,9 @@ export default function ProjectCycleSchedulePage() {
                                   <span className="text-xs text-zinc-500">
                                     {a.planned_hours}h · {memberLabel(a.assignee_user_id)}
                                     {a.assignee_job_title || a.matched_job
-                                      ? `（${
-                                          JOB_TITLE_LABELS[
-                                            (a.assignee_job_title ||
-                                              a.matched_job ||
-                                              "") as JobTitle
-                                          ] ||
-                                          a.assignee_job_title ||
-                                          a.matched_job
-                                        }）`
+                                      ? `（${jobTitleLabel(
+                                          a.assignee_job_title || a.matched_job,
+                                        )}）`
                                       : ""}
                                   </span>
                                 </li>
