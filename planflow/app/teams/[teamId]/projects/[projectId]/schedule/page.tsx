@@ -25,7 +25,21 @@ import {
   type SeedMode,
   type WorkItemStatus,
 } from "@/lib/cycle-schedule-api";
-import { listMembers, updateMemberJobTitle, jobTitleLabel, type TeamMember } from "@/lib/members-api";
+import {
+  assigneeLabelForId,
+  assigneeOptionLabel,
+  type AssigneeOption,
+} from "@/lib/assignee-label";
+import {
+  listMembers,
+  updateMemberJobTitle,
+  jobTitleLabel,
+  type TeamMember,
+} from "@/lib/members-api";
+import {
+  listProjectMembers,
+  type ProjectMember,
+} from "@/lib/project-members-api";
 import { listTeamProjects } from "@/lib/projects-api";
 import { listTasks, type Task } from "@/lib/tasks-api";
 import { listMyTeams } from "@/lib/teams-api";
@@ -47,6 +61,7 @@ export default function ProjectCycleSchedulePage() {
   const [schedule, setSchedule] = useState<CycleSchedule | null>(null);
   const [dailyPlan, setDailyPlan] = useState<DailyPlan | null>(null);
   const [members, setMembers] = useState<TeamMember[]>([]);
+  const [projectMembers, setProjectMembers] = useState<ProjectMember[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -63,6 +78,9 @@ export default function ProjectCycleSchedulePage() {
   const [newItemTitleByPhase, setNewItemTitleByPhase] = useState<Record<string, string>>(
     {},
   );
+  const [newItemAssigneeByPhase, setNewItemAssigneeByPhase] = useState<
+    Record<string, string>
+  >({});
 
   const refresh = useCallback(async () => {
     setError(null);
@@ -77,23 +95,32 @@ export default function ProjectCycleSchedulePage() {
       setSchedule(null);
       return;
     }
-    const [payload, membersPayload, tasksPayload, projectsPayload, planPayload, aiStatus] =
-      await Promise.all([
-        getCycleSchedule(token, teamId, projectId),
-        listMembers(token, teamId),
-        listTasks(token, teamId, projectId),
-        listTeamProjects(token, teamId),
-        getDailyPlan(token, teamId, projectId).catch(() => null),
-        getAiScheduleStatus(token).catch(() => ({
-          configured: false,
-          model: null,
-          base_url: null,
-        })),
-      ]);
+    const [
+      payload,
+      membersPayload,
+      projectMembersPayload,
+      tasksPayload,
+      projectsPayload,
+      planPayload,
+      aiStatus,
+    ] = await Promise.all([
+      getCycleSchedule(token, teamId, projectId),
+      listMembers(token, teamId),
+      listProjectMembers(token, teamId, projectId).catch(() => ({ members: [] })),
+      listTasks(token, teamId, projectId),
+      listTeamProjects(token, teamId),
+      getDailyPlan(token, teamId, projectId).catch(() => null),
+      getAiScheduleStatus(token).catch(() => ({
+        configured: false,
+        model: null,
+        base_url: null,
+      })),
+    ]);
     setAiConfigured(Boolean(aiStatus.configured));
     if (payload.ai_analysis) setAiAnalysis(payload.ai_analysis);
     setSchedule(payload);
     setMembers(membersPayload.members);
+    setProjectMembers(projectMembersPayload.members);
     setTasks(tasksPayload.tasks);
     setDailyPlan(planPayload);
     setImportPhaseId((prev) => prev || payload.phases[0]?.id || "");
@@ -135,6 +162,26 @@ export default function ProjectCycleSchedulePage() {
     () => tasks.filter((t) => !linkedTaskIds.has(t.id)),
     [tasks, linkedTaskIds],
   );
+
+  /** Prefer project members for assignment; fall back to team roster. */
+  const assignees = useMemo<AssigneeOption[]>(() => {
+    if (projectMembers.length > 0) {
+      return projectMembers.map((m) => ({
+        user_id: m.user_id,
+        display_name: m.display_name,
+        email: m.email,
+        clerk_user_id: m.clerk_user_id,
+        job_title: m.job_title,
+      }));
+    }
+    return members.map((m) => ({
+      user_id: m.user_id,
+      display_name: m.display_name,
+      email: m.email,
+      clerk_user_id: m.clerk_user_id,
+      job_title: m.job_title,
+    }));
+  }, [projectMembers, members]);
 
   async function onGenerate(replaceExisting: boolean, mode: SeedMode = seedMode) {
     setBusy(true);
@@ -255,7 +302,7 @@ export default function ProjectCycleSchedulePage() {
   }
 
   async function onDeletePhase(phaseId: string, phaseName: string) {
-    if (!window.confirm(`删除阶段「${phaseName}」及其工作项？`)) return;
+    if (!window.confirm(`删除分组「${phaseName}」及其工作项？`)) return;
     setBusy(true);
     setError(null);
     try {
@@ -295,8 +342,13 @@ export default function ProjectCycleSchedulePage() {
     try {
       const token = await getToken();
       if (!token) throw new Error("拿不到登录 token");
-      await createWorkItem(token, teamId, projectId, phaseId, { title });
+      const assignee = (newItemAssigneeByPhase[phaseId] || "").trim();
+      await createWorkItem(token, teamId, projectId, phaseId, {
+        title,
+        assignee_user_id: assignee || null,
+      });
       setNewItemTitleByPhase((prev) => ({ ...prev, [phaseId]: "" }));
+      setNewItemAssigneeByPhase((prev) => ({ ...prev, [phaseId]: "" }));
       await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -418,9 +470,12 @@ export default function ProjectCycleSchedulePage() {
   }
 
   function memberLabel(userId: string | null) {
-    if (!userId) return "未指派";
-    const m = members.find((x) => x.user_id === userId);
-    return m?.display_name || m?.email || m?.clerk_user_id || userId.slice(0, 8);
+    const pool: AssigneeOption[] = [
+      ...assignees,
+      ...members,
+      ...projectMembers,
+    ];
+    return assigneeLabelForId(userId, pool);
   }
 
   const empty = !loading && schedule && schedule.phase_count === 0;
@@ -431,7 +486,7 @@ export default function ProjectCycleSchedulePage() {
       projectId={projectId}
       projectName={schedule?.project_name}
     >
-    <main className="mx-auto flex w-full max-w-4xl flex-1 flex-col px-6 py-10">
+    <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col px-6 py-10">
       <p className="text-xs font-medium uppercase tracking-[0.16em] text-zinc-500">
         Project Master Plan
       </p>
@@ -681,7 +736,7 @@ export default function ProjectCycleSchedulePage() {
                             className="flex flex-wrap items-center justify-between gap-2 text-sm"
                           >
                             <span className="text-zinc-800">
-                              {m.display_name || m.email || m.clerk_user_id}
+                              {assigneeOptionLabel(m)}
                             </span>
                             <JobTitlePicker
                               value={m.job_title}
@@ -707,7 +762,7 @@ export default function ProjectCycleSchedulePage() {
                           <p
                             className={`text-xs ${index === 0 ? "text-zinc-300" : "text-zinc-500"}`}
                           >
-                            阶段 {index + 1}
+                            分组 {index + 1}
                           </p>
                           <input
                             defaultValue={phase.name}
@@ -738,7 +793,7 @@ export default function ProjectCycleSchedulePage() {
                               index === 0 ? "text-zinc-300" : "text-zinc-500"
                             }`}
                           >
-                            删除阶段
+                            删除分组
                           </button>
                         </li>
                       ))}
@@ -747,7 +802,13 @@ export default function ProjectCycleSchedulePage() {
                       <input
                         value={newPhaseName}
                         onChange={(e) => setNewPhaseName(e.target.value)}
-                        placeholder="新阶段名称，例如：联调验收"
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            void onAddPhase();
+                          }
+                        }}
+                        placeholder="新分组名称，例如：项目启动与目标确认"
                         className="min-w-[220px] flex-1 rounded-md border border-zinc-300 px-3 py-2 text-sm"
                       />
                       <button
@@ -756,9 +817,12 @@ export default function ProjectCycleSchedulePage() {
                         onClick={() => void onAddPhase()}
                         className="rounded-md border border-zinc-300 px-3 py-2 text-sm text-zinc-800 hover:bg-zinc-50 disabled:opacity-50"
                       >
-                        添加阶段
+                        添加分组
                       </button>
                     </div>
+                    <p className="mt-2 text-xs text-zinc-500">
+                      分组会作为下方工作项表的灰色标题行；也可在「工作项安排」里直接添加。
+                    </p>
                   </section>
 
                   <section className="rounded-md border border-zinc-200 bg-zinc-50 px-4 py-4">
@@ -800,45 +864,135 @@ export default function ProjectCycleSchedulePage() {
                   </section>
 
                   <section>
-                    <h2 className="text-sm font-medium uppercase tracking-wide text-zinc-500">
-                      工作项安排
-                    </h2>
+                    <div className="flex flex-wrap items-end justify-between gap-3">
+                      <div>
+                        <h2 className="text-sm font-medium uppercase tracking-wide text-zinc-500">
+                          工作项安排
+                        </h2>
+                        <p className="mt-1 text-xs text-zinc-500">
+                          灰色标题行是分组（如「项目启动与目标确认」）。可在下方新增分组，再往分组里添加工作项。
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <input
+                          value={newPhaseName}
+                          onChange={(e) => setNewPhaseName(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              void onAddPhase();
+                            }
+                          }}
+                          placeholder="新分组名称，例如：项目启动与目标确认"
+                          className="min-w-[240px] rounded-md border border-zinc-300 px-3 py-2 text-sm"
+                          aria-label="新分组名称"
+                        />
+                        <button
+                          type="button"
+                          disabled={busy || !newPhaseName.trim()}
+                          onClick={() => void onAddPhase()}
+                          className="rounded-md bg-zinc-900 px-3 py-2 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-50"
+                        >
+                          添加分组
+                        </button>
+                      </div>
+                    </div>
                     <div className="mt-3 overflow-x-auto">
-                      <table className="w-full min-w-[860px] border-collapse text-left text-sm">
+                      <table className="w-full min-w-[980px] table-fixed border-collapse text-left text-sm">
                         <thead>
                           <tr className="border-b border-zinc-200 text-xs text-zinc-500">
-                            <th className="py-2 pr-3 font-medium">阶段 / 工作项</th>
-                            <th className="py-2 pr-3 font-medium">负责人</th>
-                            <th className="py-2 pr-3 font-medium">计划开始</th>
-                            <th className="py-2 pr-3 font-medium">计划结束</th>
-                            <th className="py-2 pr-3 font-medium">估时(h)</th>
-                            <th className="py-2 pr-3 font-medium">状态</th>
-                            <th className="py-2 font-medium">任务</th>
+                            <th className="w-[34%] min-w-[260px] py-2 pr-3 font-medium">
+                              分组 / 工作项
+                            </th>
+                            <th className="w-[16%] min-w-[150px] py-2 pr-3 font-medium">
+                              负责人
+                            </th>
+                            <th className="w-[12%] py-2 pr-3 font-medium">计划开始</th>
+                            <th className="w-[12%] py-2 pr-3 font-medium">计划结束</th>
+                            <th className="w-[8%] py-2 pr-3 font-medium">估时(h)</th>
+                            <th className="w-[10%] py-2 pr-3 font-medium">状态</th>
+                            <th className="w-[8%] py-2 font-medium">任务</th>
                           </tr>
                         </thead>
                         <tbody>
+                          {schedule.phases.length === 0 ? (
+                            <tr>
+                              <td
+                                colSpan={7}
+                                className="py-8 text-center text-sm text-zinc-500"
+                              >
+                                还没有分组。用上方「添加分组」创建第一个，例如「项目启动与目标确认」。
+                              </td>
+                            </tr>
+                          ) : null}
                           {schedule.phases.map((phase) => (
                             <PhaseRows
                               key={phase.id}
+                              phaseId={phase.id}
                               phaseName={phase.name}
                               items={phase.work_items}
-                              members={members}
+                              members={assignees}
                               busyItemId={busyItemId}
                               busy={busy}
                               newItemTitle={newItemTitleByPhase[phase.id] || ""}
+                              newItemAssignee={
+                                newItemAssigneeByPhase[phase.id] || ""
+                              }
                               onNewItemTitle={(value) =>
                                 setNewItemTitleByPhase((prev) => ({
                                   ...prev,
                                   [phase.id]: value,
                                 }))
                               }
+                              onNewItemAssignee={(value) =>
+                                setNewItemAssigneeByPhase((prev) => ({
+                                  ...prev,
+                                  [phase.id]: value,
+                                }))
+                              }
                               onAddItem={() => void onAddWorkItem(phase.id)}
+                              onRenamePhase={(name) =>
+                                void onRenamePhase(phase.id, name)
+                              }
+                              onDeletePhase={() =>
+                                void onDeletePhase(phase.id, phase.name)
+                              }
                               memberLabel={memberLabel}
                               onPatch={patchItem}
                               onSync={(id) => void onSyncTask(id)}
                               onDelete={(id) => void onDeleteItem(id)}
                             />
                           ))}
+                          <tr className="border-b border-zinc-100 bg-zinc-50/50">
+                            <td colSpan={7} className="py-3">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="text-xs font-medium text-zinc-500">
+                                  新建分组
+                                </span>
+                                <input
+                                  value={newPhaseName}
+                                  onChange={(e) => setNewPhaseName(e.target.value)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter") {
+                                      e.preventDefault();
+                                      void onAddPhase();
+                                    }
+                                  }}
+                                  placeholder="例如：联调验收 / 上线准备"
+                                  className="min-w-[220px] flex-1 rounded-md border border-zinc-300 px-2 py-1.5 text-sm"
+                                  aria-label="在表格底部添加分组"
+                                />
+                                <button
+                                  type="button"
+                                  disabled={busy || !newPhaseName.trim()}
+                                  onClick={() => void onAddPhase()}
+                                  className="rounded-md border border-zinc-300 px-3 py-1.5 text-xs text-zinc-800 hover:bg-white disabled:opacity-50"
+                                >
+                                  添加分组
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
                         </tbody>
                       </table>
                     </div>
@@ -949,27 +1103,37 @@ function Summary({ label, value }: { label: string; value: string }) {
 }
 
 function PhaseRows({
+  phaseId,
   phaseName,
   items,
   members,
   busyItemId,
   busy,
   newItemTitle,
+  newItemAssignee,
   onNewItemTitle,
+  onNewItemAssignee,
   onAddItem,
+  onRenamePhase,
+  onDeletePhase,
   memberLabel,
   onPatch,
   onSync,
   onDelete,
 }: {
+  phaseId: string;
   phaseName: string;
   items: CycleSchedule["phases"][number]["work_items"];
-  members: TeamMember[];
+  members: AssigneeOption[];
   busyItemId: string | null;
   busy: boolean;
   newItemTitle: string;
+  newItemAssignee: string;
   onNewItemTitle: (value: string) => void;
+  onNewItemAssignee: (value: string) => void;
   onAddItem: () => void;
+  onRenamePhase: (name: string) => void;
+  onDeletePhase: () => void;
   memberLabel: (id: string | null) => string;
   onPatch: (
     itemId: string,
@@ -981,26 +1145,53 @@ function PhaseRows({
   return (
     <>
       <tr className="border-b border-zinc-100 bg-zinc-50/80">
-        <td colSpan={7} className="py-2 pr-3 text-xs font-medium text-zinc-600">
-          {phaseName}
+        <td colSpan={7} className="py-2 pr-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              defaultValue={phaseName}
+              key={`${phaseId}-${phaseName}`}
+              disabled={busy}
+              title={phaseName}
+              onBlur={(e) => {
+                const next = e.target.value.trim();
+                if (!next || next === phaseName) return;
+                onRenamePhase(next);
+              }}
+              className="min-w-[200px] flex-1 rounded-md border border-transparent bg-transparent px-1 py-0.5 text-xs font-medium text-zinc-700 hover:border-zinc-300 focus:border-zinc-400 focus:bg-white"
+              aria-label="分组名称"
+            />
+            <button
+              type="button"
+              disabled={busy}
+              onClick={onDeletePhase}
+              className="shrink-0 text-xs text-zinc-500 underline disabled:opacity-50"
+            >
+              删除分组
+            </button>
+          </div>
         </td>
       </tr>
       {items.map((item) => {
         const disabled = busyItemId === item.id;
         const status =
           item.status === "doing" || item.status === "done" ? item.status : "todo";
+        const assigneeKnown =
+          !item.assignee_user_id ||
+          members.some((m) => m.user_id === item.assignee_user_id);
         return (
           <tr key={item.id} className="border-b border-zinc-100 align-top">
             <td className="py-2 pr-3">
-              <input
+              <textarea
                 defaultValue={item.title}
+                title={item.title}
+                rows={2}
                 disabled={disabled}
                 onBlur={(e) => {
                   const next = e.target.value.trim();
                   if (!next || next === item.title) return;
                   void onPatch(item.id, { title: next });
                 }}
-                className="w-full rounded-md border border-zinc-300 px-2 py-1.5 text-sm"
+                className="w-full min-w-0 resize-y rounded-md border border-zinc-300 px-2 py-1.5 text-sm leading-snug"
               />
             </td>
             <td className="py-2 pr-3">
@@ -1016,13 +1207,19 @@ function PhaseRows({
                       : { clear_assignee: true },
                   );
                 }}
-                className="rounded-md border border-zinc-300 px-2 py-1.5 text-sm"
+                className="w-full max-w-[220px] rounded-md border border-zinc-300 px-2 py-1.5 text-sm"
                 title={memberLabel(item.assignee_user_id)}
+                aria-label="负责人"
               >
                 <option value="">未指派</option>
+                {!assigneeKnown && item.assignee_user_id ? (
+                  <option value={item.assignee_user_id}>
+                    {memberLabel(item.assignee_user_id)}
+                  </option>
+                ) : null}
                 {members.map((m) => (
                   <option key={m.user_id} value={m.user_id}>
-                    {m.display_name || m.email || m.clerk_user_id}
+                    {assigneeOptionLabel(m)}
                   </option>
                 ))}
               </select>
@@ -1042,7 +1239,7 @@ function PhaseRows({
                     clear_dates: !start && !item.planned_end,
                   });
                 }}
-                className="rounded-md border border-zinc-300 px-2 py-1.5 text-sm"
+                className="w-full max-w-[150px] rounded-md border border-zinc-300 px-2 py-1.5 text-sm"
               />
             </td>
             <td className="py-2 pr-3">
@@ -1060,7 +1257,7 @@ function PhaseRows({
                     clear_dates: !item.planned_start && !end,
                   });
                 }}
-                className="rounded-md border border-zinc-300 px-2 py-1.5 text-sm"
+                className="w-full max-w-[150px] rounded-md border border-zinc-300 px-2 py-1.5 text-sm"
               />
             </td>
             <td className="py-2 pr-3">
@@ -1079,7 +1276,7 @@ function PhaseRows({
                   }
                   void onPatch(item.id, { estimated_hours: hours });
                 }}
-                className="w-20 rounded-md border border-zinc-300 px-2 py-1.5 text-sm"
+                className="w-full max-w-[5.5rem] rounded-md border border-zinc-300 px-2 py-1.5 text-sm"
               />
             </td>
             <td className="py-2 pr-3">
@@ -1091,7 +1288,7 @@ function PhaseRows({
                     status: e.target.value as WorkItemStatus,
                   })
                 }
-                className="rounded-md border border-zinc-300 px-2 py-1.5 text-sm"
+                className="w-full rounded-md border border-zinc-300 px-2 py-1.5 text-sm"
               >
                 <option value="todo">{STATUS_LABELS.todo}</option>
                 <option value="doing">{STATUS_LABELS.doing}</option>
@@ -1127,13 +1324,28 @@ function PhaseRows({
       })}
       <tr className="border-b border-zinc-100">
         <td colSpan={7} className="py-2">
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <input
               value={newItemTitle}
               onChange={(e) => onNewItemTitle(e.target.value)}
               placeholder={`在「${phaseName}」添加工作项`}
               className="min-w-[240px] flex-1 rounded-md border border-zinc-300 px-2 py-1.5 text-sm"
             />
+            <select
+              value={newItemAssignee}
+              onChange={(e) => onNewItemAssignee(e.target.value)}
+              disabled={busy}
+              className="min-w-[160px] rounded-md border border-zinc-300 px-2 py-1.5 text-sm"
+              aria-label="新工作项负责人"
+              title="选择要把这项任务分给谁"
+            >
+              <option value="">指派给…（可选）</option>
+              {members.map((m) => (
+                <option key={m.user_id} value={m.user_id}>
+                  {assigneeOptionLabel(m)}
+                </option>
+              ))}
+            </select>
             <button
               type="button"
               disabled={busy || !newItemTitle.trim()}
@@ -1143,6 +1355,9 @@ function PhaseRows({
               添加工作项
             </button>
           </div>
+          <p className="mt-1 text-xs text-zinc-500">
+            可直接指派给其他成员，不必先建给自己再改负责人。
+          </p>
         </td>
       </tr>
     </>
