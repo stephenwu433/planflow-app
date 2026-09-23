@@ -26,6 +26,10 @@ import {
   type WorkItemStatus,
 } from "@/lib/cycle-schedule-api";
 import { listMembers, updateMemberJobTitle, jobTitleLabel, type TeamMember } from "@/lib/members-api";
+import {
+  listProjectMembers,
+  type ProjectMember,
+} from "@/lib/project-members-api";
 import { listTeamProjects } from "@/lib/projects-api";
 import { listTasks, type Task } from "@/lib/tasks-api";
 import { listMyTeams } from "@/lib/teams-api";
@@ -38,6 +42,32 @@ const STATUS_LABELS: Record<WorkItemStatus, string> = {
   done: "已完成",
 };
 
+type AssigneeOption = {
+  user_id: string;
+  display_name: string | null;
+  email: string | null;
+  clerk_user_id?: string | null;
+  job_title?: string | null;
+};
+
+function assigneeDisplayName(m: AssigneeOption): string {
+  const name = m.display_name?.trim();
+  if (name) return name;
+  const email = m.email?.trim();
+  if (email) return email;
+  const clerk = m.clerk_user_id?.trim();
+  if (clerk) return clerk;
+  return `成员 ${m.user_id.slice(0, 8)}`;
+}
+
+function assigneeOptionLabel(m: AssigneeOption): string {
+  const name = assigneeDisplayName(m);
+  if (!m.job_title) return name;
+  const job = jobTitleLabel(m.job_title);
+  if (!job || job === "未设置岗位") return name;
+  return `${name}（${job}）`;
+}
+
 export default function ProjectCycleSchedulePage() {
   const { isLoaded, isSignedIn, getToken } = useAuth();
   const params = useParams<{ teamId: string; projectId: string }>();
@@ -47,6 +77,7 @@ export default function ProjectCycleSchedulePage() {
   const [schedule, setSchedule] = useState<CycleSchedule | null>(null);
   const [dailyPlan, setDailyPlan] = useState<DailyPlan | null>(null);
   const [members, setMembers] = useState<TeamMember[]>([]);
+  const [projectMembers, setProjectMembers] = useState<ProjectMember[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -63,6 +94,9 @@ export default function ProjectCycleSchedulePage() {
   const [newItemTitleByPhase, setNewItemTitleByPhase] = useState<Record<string, string>>(
     {},
   );
+  const [newItemAssigneeByPhase, setNewItemAssigneeByPhase] = useState<
+    Record<string, string>
+  >({});
 
   const refresh = useCallback(async () => {
     setError(null);
@@ -77,23 +111,32 @@ export default function ProjectCycleSchedulePage() {
       setSchedule(null);
       return;
     }
-    const [payload, membersPayload, tasksPayload, projectsPayload, planPayload, aiStatus] =
-      await Promise.all([
-        getCycleSchedule(token, teamId, projectId),
-        listMembers(token, teamId),
-        listTasks(token, teamId, projectId),
-        listTeamProjects(token, teamId),
-        getDailyPlan(token, teamId, projectId).catch(() => null),
-        getAiScheduleStatus(token).catch(() => ({
-          configured: false,
-          model: null,
-          base_url: null,
-        })),
-      ]);
+    const [
+      payload,
+      membersPayload,
+      projectMembersPayload,
+      tasksPayload,
+      projectsPayload,
+      planPayload,
+      aiStatus,
+    ] = await Promise.all([
+      getCycleSchedule(token, teamId, projectId),
+      listMembers(token, teamId),
+      listProjectMembers(token, teamId, projectId).catch(() => ({ members: [] })),
+      listTasks(token, teamId, projectId),
+      listTeamProjects(token, teamId),
+      getDailyPlan(token, teamId, projectId).catch(() => null),
+      getAiScheduleStatus(token).catch(() => ({
+        configured: false,
+        model: null,
+        base_url: null,
+      })),
+    ]);
     setAiConfigured(Boolean(aiStatus.configured));
     if (payload.ai_analysis) setAiAnalysis(payload.ai_analysis);
     setSchedule(payload);
     setMembers(membersPayload.members);
+    setProjectMembers(projectMembersPayload.members);
     setTasks(tasksPayload.tasks);
     setDailyPlan(planPayload);
     setImportPhaseId((prev) => prev || payload.phases[0]?.id || "");
@@ -135,6 +178,26 @@ export default function ProjectCycleSchedulePage() {
     () => tasks.filter((t) => !linkedTaskIds.has(t.id)),
     [tasks, linkedTaskIds],
   );
+
+  /** Prefer project members for assignment; fall back to team roster. */
+  const assignees = useMemo<AssigneeOption[]>(() => {
+    if (projectMembers.length > 0) {
+      return projectMembers.map((m) => ({
+        user_id: m.user_id,
+        display_name: m.display_name,
+        email: m.email,
+        clerk_user_id: m.clerk_user_id,
+        job_title: m.job_title,
+      }));
+    }
+    return members.map((m) => ({
+      user_id: m.user_id,
+      display_name: m.display_name,
+      email: m.email,
+      clerk_user_id: m.clerk_user_id,
+      job_title: m.job_title,
+    }));
+  }, [projectMembers, members]);
 
   async function onGenerate(replaceExisting: boolean, mode: SeedMode = seedMode) {
     setBusy(true);
@@ -295,8 +358,13 @@ export default function ProjectCycleSchedulePage() {
     try {
       const token = await getToken();
       if (!token) throw new Error("拿不到登录 token");
-      await createWorkItem(token, teamId, projectId, phaseId, { title });
+      const assignee = (newItemAssigneeByPhase[phaseId] || "").trim();
+      await createWorkItem(token, teamId, projectId, phaseId, {
+        title,
+        assignee_user_id: assignee || null,
+      });
       setNewItemTitleByPhase((prev) => ({ ...prev, [phaseId]: "" }));
+      setNewItemAssigneeByPhase((prev) => ({ ...prev, [phaseId]: "" }));
       await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -419,8 +487,12 @@ export default function ProjectCycleSchedulePage() {
 
   function memberLabel(userId: string | null) {
     if (!userId) return "未指派";
-    const m = members.find((x) => x.user_id === userId);
-    return m?.display_name || m?.email || m?.clerk_user_id || userId.slice(0, 8);
+    const m =
+      assignees.find((x) => x.user_id === userId) ||
+      members.find((x) => x.user_id === userId) ||
+      projectMembers.find((x) => x.user_id === userId);
+    if (!m) return `未知成员（${userId.slice(0, 8)}）`;
+    return assigneeOptionLabel(m);
   }
 
   const empty = !loading && schedule && schedule.phase_count === 0;
@@ -431,7 +503,7 @@ export default function ProjectCycleSchedulePage() {
       projectId={projectId}
       projectName={schedule?.project_name}
     >
-    <main className="mx-auto flex w-full max-w-4xl flex-1 flex-col px-6 py-10">
+    <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col px-6 py-10">
       <p className="text-xs font-medium uppercase tracking-[0.16em] text-zinc-500">
         Project Master Plan
       </p>
@@ -681,7 +753,7 @@ export default function ProjectCycleSchedulePage() {
                             className="flex flex-wrap items-center justify-between gap-2 text-sm"
                           >
                             <span className="text-zinc-800">
-                              {m.display_name || m.email || m.clerk_user_id}
+                              {assigneeOptionLabel(m)}
                             </span>
                             <JobTitlePicker
                               value={m.job_title}
@@ -804,16 +876,20 @@ export default function ProjectCycleSchedulePage() {
                       工作项安排
                     </h2>
                     <div className="mt-3 overflow-x-auto">
-                      <table className="w-full min-w-[860px] border-collapse text-left text-sm">
+                      <table className="w-full min-w-[980px] table-fixed border-collapse text-left text-sm">
                         <thead>
                           <tr className="border-b border-zinc-200 text-xs text-zinc-500">
-                            <th className="py-2 pr-3 font-medium">阶段 / 工作项</th>
-                            <th className="py-2 pr-3 font-medium">负责人</th>
-                            <th className="py-2 pr-3 font-medium">计划开始</th>
-                            <th className="py-2 pr-3 font-medium">计划结束</th>
-                            <th className="py-2 pr-3 font-medium">估时(h)</th>
-                            <th className="py-2 pr-3 font-medium">状态</th>
-                            <th className="py-2 font-medium">任务</th>
+                            <th className="w-[34%] min-w-[260px] py-2 pr-3 font-medium">
+                              阶段 / 工作项
+                            </th>
+                            <th className="w-[16%] min-w-[150px] py-2 pr-3 font-medium">
+                              负责人
+                            </th>
+                            <th className="w-[12%] py-2 pr-3 font-medium">计划开始</th>
+                            <th className="w-[12%] py-2 pr-3 font-medium">计划结束</th>
+                            <th className="w-[8%] py-2 pr-3 font-medium">估时(h)</th>
+                            <th className="w-[10%] py-2 pr-3 font-medium">状态</th>
+                            <th className="w-[8%] py-2 font-medium">任务</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -822,12 +898,21 @@ export default function ProjectCycleSchedulePage() {
                               key={phase.id}
                               phaseName={phase.name}
                               items={phase.work_items}
-                              members={members}
+                              members={assignees}
                               busyItemId={busyItemId}
                               busy={busy}
                               newItemTitle={newItemTitleByPhase[phase.id] || ""}
+                              newItemAssignee={
+                                newItemAssigneeByPhase[phase.id] || ""
+                              }
                               onNewItemTitle={(value) =>
                                 setNewItemTitleByPhase((prev) => ({
+                                  ...prev,
+                                  [phase.id]: value,
+                                }))
+                              }
+                              onNewItemAssignee={(value) =>
+                                setNewItemAssigneeByPhase((prev) => ({
                                   ...prev,
                                   [phase.id]: value,
                                 }))
@@ -955,7 +1040,9 @@ function PhaseRows({
   busyItemId,
   busy,
   newItemTitle,
+  newItemAssignee,
   onNewItemTitle,
+  onNewItemAssignee,
   onAddItem,
   memberLabel,
   onPatch,
@@ -964,11 +1051,13 @@ function PhaseRows({
 }: {
   phaseName: string;
   items: CycleSchedule["phases"][number]["work_items"];
-  members: TeamMember[];
+  members: AssigneeOption[];
   busyItemId: string | null;
   busy: boolean;
   newItemTitle: string;
+  newItemAssignee: string;
   onNewItemTitle: (value: string) => void;
+  onNewItemAssignee: (value: string) => void;
   onAddItem: () => void;
   memberLabel: (id: string | null) => string;
   onPatch: (
@@ -989,18 +1078,23 @@ function PhaseRows({
         const disabled = busyItemId === item.id;
         const status =
           item.status === "doing" || item.status === "done" ? item.status : "todo";
+        const assigneeKnown =
+          !item.assignee_user_id ||
+          members.some((m) => m.user_id === item.assignee_user_id);
         return (
           <tr key={item.id} className="border-b border-zinc-100 align-top">
             <td className="py-2 pr-3">
-              <input
+              <textarea
                 defaultValue={item.title}
+                title={item.title}
+                rows={2}
                 disabled={disabled}
                 onBlur={(e) => {
                   const next = e.target.value.trim();
                   if (!next || next === item.title) return;
                   void onPatch(item.id, { title: next });
                 }}
-                className="w-full rounded-md border border-zinc-300 px-2 py-1.5 text-sm"
+                className="w-full min-w-0 resize-y rounded-md border border-zinc-300 px-2 py-1.5 text-sm leading-snug"
               />
             </td>
             <td className="py-2 pr-3">
@@ -1016,13 +1110,19 @@ function PhaseRows({
                       : { clear_assignee: true },
                   );
                 }}
-                className="rounded-md border border-zinc-300 px-2 py-1.5 text-sm"
+                className="w-full max-w-[220px] rounded-md border border-zinc-300 px-2 py-1.5 text-sm"
                 title={memberLabel(item.assignee_user_id)}
+                aria-label="负责人"
               >
                 <option value="">未指派</option>
+                {!assigneeKnown && item.assignee_user_id ? (
+                  <option value={item.assignee_user_id}>
+                    {memberLabel(item.assignee_user_id)}
+                  </option>
+                ) : null}
                 {members.map((m) => (
                   <option key={m.user_id} value={m.user_id}>
-                    {m.display_name || m.email || m.clerk_user_id}
+                    {assigneeOptionLabel(m)}
                   </option>
                 ))}
               </select>
@@ -1042,7 +1142,7 @@ function PhaseRows({
                     clear_dates: !start && !item.planned_end,
                   });
                 }}
-                className="rounded-md border border-zinc-300 px-2 py-1.5 text-sm"
+                className="w-full max-w-[150px] rounded-md border border-zinc-300 px-2 py-1.5 text-sm"
               />
             </td>
             <td className="py-2 pr-3">
@@ -1060,7 +1160,7 @@ function PhaseRows({
                     clear_dates: !item.planned_start && !end,
                   });
                 }}
-                className="rounded-md border border-zinc-300 px-2 py-1.5 text-sm"
+                className="w-full max-w-[150px] rounded-md border border-zinc-300 px-2 py-1.5 text-sm"
               />
             </td>
             <td className="py-2 pr-3">
@@ -1079,7 +1179,7 @@ function PhaseRows({
                   }
                   void onPatch(item.id, { estimated_hours: hours });
                 }}
-                className="w-20 rounded-md border border-zinc-300 px-2 py-1.5 text-sm"
+                className="w-full max-w-[5.5rem] rounded-md border border-zinc-300 px-2 py-1.5 text-sm"
               />
             </td>
             <td className="py-2 pr-3">
@@ -1091,7 +1191,7 @@ function PhaseRows({
                     status: e.target.value as WorkItemStatus,
                   })
                 }
-                className="rounded-md border border-zinc-300 px-2 py-1.5 text-sm"
+                className="w-full rounded-md border border-zinc-300 px-2 py-1.5 text-sm"
               >
                 <option value="todo">{STATUS_LABELS.todo}</option>
                 <option value="doing">{STATUS_LABELS.doing}</option>
@@ -1127,13 +1227,28 @@ function PhaseRows({
       })}
       <tr className="border-b border-zinc-100">
         <td colSpan={7} className="py-2">
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <input
               value={newItemTitle}
               onChange={(e) => onNewItemTitle(e.target.value)}
               placeholder={`在「${phaseName}」添加工作项`}
               className="min-w-[240px] flex-1 rounded-md border border-zinc-300 px-2 py-1.5 text-sm"
             />
+            <select
+              value={newItemAssignee}
+              onChange={(e) => onNewItemAssignee(e.target.value)}
+              disabled={busy}
+              className="min-w-[160px] rounded-md border border-zinc-300 px-2 py-1.5 text-sm"
+              aria-label="新工作项负责人"
+              title="选择要把这项任务分给谁"
+            >
+              <option value="">指派给…（可选）</option>
+              {members.map((m) => (
+                <option key={m.user_id} value={m.user_id}>
+                  {assigneeOptionLabel(m)}
+                </option>
+              ))}
+            </select>
             <button
               type="button"
               disabled={busy || !newItemTitle.trim()}
@@ -1143,6 +1258,9 @@ function PhaseRows({
               添加工作项
             </button>
           </div>
+          <p className="mt-1 text-xs text-zinc-500">
+            可直接指派给其他成员，不必先建给自己再改负责人。
+          </p>
         </td>
       </tr>
     </>
