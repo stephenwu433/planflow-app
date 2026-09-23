@@ -302,7 +302,7 @@ export default function ProjectCycleSchedulePage() {
   }
 
   async function onDeletePhase(phaseId: string, phaseName: string) {
-    if (!window.confirm(`删除阶段「${phaseName}」及其工作项？`)) return;
+    if (!window.confirm(`删除分组「${phaseName}」及其工作项？`)) return;
     setBusy(true);
     setError(null);
     try {
@@ -762,7 +762,7 @@ export default function ProjectCycleSchedulePage() {
                           <p
                             className={`text-xs ${index === 0 ? "text-zinc-300" : "text-zinc-500"}`}
                           >
-                            阶段 {index + 1}
+                            分组 {index + 1}
                           </p>
                           <input
                             defaultValue={phase.name}
@@ -793,7 +793,7 @@ export default function ProjectCycleSchedulePage() {
                               index === 0 ? "text-zinc-300" : "text-zinc-500"
                             }`}
                           >
-                            删除阶段
+                            删除分组
                           </button>
                         </li>
                       ))}
@@ -802,7 +802,13 @@ export default function ProjectCycleSchedulePage() {
                       <input
                         value={newPhaseName}
                         onChange={(e) => setNewPhaseName(e.target.value)}
-                        placeholder="新阶段名称，例如：联调验收"
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            void onAddPhase();
+                          }
+                        }}
+                        placeholder="新分组名称，例如：项目启动与目标确认"
                         className="min-w-[220px] flex-1 rounded-md border border-zinc-300 px-3 py-2 text-sm"
                       />
                       <button
@@ -811,9 +817,12 @@ export default function ProjectCycleSchedulePage() {
                         onClick={() => void onAddPhase()}
                         className="rounded-md border border-zinc-300 px-3 py-2 text-sm text-zinc-800 hover:bg-zinc-50 disabled:opacity-50"
                       >
-                        添加阶段
+                        添加分组
                       </button>
                     </div>
+                    <p className="mt-2 text-xs text-zinc-500">
+                      分组会作为下方工作项表的灰色标题行；也可在「工作项安排」里直接添加。
+                    </p>
                   </section>
 
                   <section className="rounded-md border border-zinc-200 bg-zinc-50 px-4 py-4">
@@ -855,15 +864,45 @@ export default function ProjectCycleSchedulePage() {
                   </section>
 
                   <section>
-                    <h2 className="text-sm font-medium uppercase tracking-wide text-zinc-500">
-                      工作项安排
-                    </h2>
+                    <div className="flex flex-wrap items-end justify-between gap-3">
+                      <div>
+                        <h2 className="text-sm font-medium uppercase tracking-wide text-zinc-500">
+                          工作项安排
+                        </h2>
+                        <p className="mt-1 text-xs text-zinc-500">
+                          灰色标题行是分组（如「项目启动与目标确认」）。可在下方新增分组，再往分组里添加工作项。
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <input
+                          value={newPhaseName}
+                          onChange={(e) => setNewPhaseName(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              void onAddPhase();
+                            }
+                          }}
+                          placeholder="新分组名称，例如：项目启动与目标确认"
+                          className="min-w-[240px] rounded-md border border-zinc-300 px-3 py-2 text-sm"
+                          aria-label="新分组名称"
+                        />
+                        <button
+                          type="button"
+                          disabled={busy || !newPhaseName.trim()}
+                          onClick={() => void onAddPhase()}
+                          className="rounded-md bg-zinc-900 px-3 py-2 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-50"
+                        >
+                          添加分组
+                        </button>
+                      </div>
+                    </div>
                     <div className="mt-3 overflow-x-auto">
                       <table className="w-full min-w-[980px] table-fixed border-collapse text-left text-sm">
                         <thead>
                           <tr className="border-b border-zinc-200 text-xs text-zinc-500">
                             <th className="w-[34%] min-w-[260px] py-2 pr-3 font-medium">
-                              阶段 / 工作项
+                              分组 / 工作项
                             </th>
                             <th className="w-[16%] min-w-[150px] py-2 pr-3 font-medium">
                               负责人
@@ -876,9 +915,20 @@ export default function ProjectCycleSchedulePage() {
                           </tr>
                         </thead>
                         <tbody>
+                          {schedule.phases.length === 0 ? (
+                            <tr>
+                              <td
+                                colSpan={7}
+                                className="py-8 text-center text-sm text-zinc-500"
+                              >
+                                还没有分组。用上方「添加分组」创建第一个，例如「项目启动与目标确认」。
+                              </td>
+                            </tr>
+                          ) : null}
                           {schedule.phases.map((phase) => (
                             <PhaseRows
                               key={phase.id}
+                              phaseId={phase.id}
                               phaseName={phase.name}
                               items={phase.work_items}
                               members={assignees}
@@ -901,12 +951,48 @@ export default function ProjectCycleSchedulePage() {
                                 }))
                               }
                               onAddItem={() => void onAddWorkItem(phase.id)}
+                              onRenamePhase={(name) =>
+                                void onRenamePhase(phase.id, name)
+                              }
+                              onDeletePhase={() =>
+                                void onDeletePhase(phase.id, phase.name)
+                              }
                               memberLabel={memberLabel}
                               onPatch={patchItem}
                               onSync={(id) => void onSyncTask(id)}
                               onDelete={(id) => void onDeleteItem(id)}
                             />
                           ))}
+                          <tr className="border-b border-zinc-100 bg-zinc-50/50">
+                            <td colSpan={7} className="py-3">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="text-xs font-medium text-zinc-500">
+                                  新建分组
+                                </span>
+                                <input
+                                  value={newPhaseName}
+                                  onChange={(e) => setNewPhaseName(e.target.value)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter") {
+                                      e.preventDefault();
+                                      void onAddPhase();
+                                    }
+                                  }}
+                                  placeholder="例如：联调验收 / 上线准备"
+                                  className="min-w-[220px] flex-1 rounded-md border border-zinc-300 px-2 py-1.5 text-sm"
+                                  aria-label="在表格底部添加分组"
+                                />
+                                <button
+                                  type="button"
+                                  disabled={busy || !newPhaseName.trim()}
+                                  onClick={() => void onAddPhase()}
+                                  className="rounded-md border border-zinc-300 px-3 py-1.5 text-xs text-zinc-800 hover:bg-white disabled:opacity-50"
+                                >
+                                  添加分组
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
                         </tbody>
                       </table>
                     </div>
@@ -1017,6 +1103,7 @@ function Summary({ label, value }: { label: string; value: string }) {
 }
 
 function PhaseRows({
+  phaseId,
   phaseName,
   items,
   members,
@@ -1027,11 +1114,14 @@ function PhaseRows({
   onNewItemTitle,
   onNewItemAssignee,
   onAddItem,
+  onRenamePhase,
+  onDeletePhase,
   memberLabel,
   onPatch,
   onSync,
   onDelete,
 }: {
+  phaseId: string;
   phaseName: string;
   items: CycleSchedule["phases"][number]["work_items"];
   members: AssigneeOption[];
@@ -1042,6 +1132,8 @@ function PhaseRows({
   onNewItemTitle: (value: string) => void;
   onNewItemAssignee: (value: string) => void;
   onAddItem: () => void;
+  onRenamePhase: (name: string) => void;
+  onDeletePhase: () => void;
   memberLabel: (id: string | null) => string;
   onPatch: (
     itemId: string,
@@ -1053,8 +1145,30 @@ function PhaseRows({
   return (
     <>
       <tr className="border-b border-zinc-100 bg-zinc-50/80">
-        <td colSpan={7} className="py-2 pr-3 text-xs font-medium text-zinc-600">
-          {phaseName}
+        <td colSpan={7} className="py-2 pr-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              defaultValue={phaseName}
+              key={`${phaseId}-${phaseName}`}
+              disabled={busy}
+              title={phaseName}
+              onBlur={(e) => {
+                const next = e.target.value.trim();
+                if (!next || next === phaseName) return;
+                onRenamePhase(next);
+              }}
+              className="min-w-[200px] flex-1 rounded-md border border-transparent bg-transparent px-1 py-0.5 text-xs font-medium text-zinc-700 hover:border-zinc-300 focus:border-zinc-400 focus:bg-white"
+              aria-label="分组名称"
+            />
+            <button
+              type="button"
+              disabled={busy}
+              onClick={onDeletePhase}
+              className="shrink-0 text-xs text-zinc-500 underline disabled:opacity-50"
+            >
+              删除分组
+            </button>
+          </div>
         </td>
       </tr>
       {items.map((item) => {
