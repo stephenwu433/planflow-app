@@ -160,6 +160,7 @@ def list_daily_tasks(
         .filter(
             ProjectDailyReport.project_id == project_id,
             ProjectDailyReport.report_date == day,
+            ProjectDailyReport.user_id == current_user.id,
         )
         .one_or_none()
     )
@@ -201,6 +202,7 @@ def save_daily_feedback(
         .filter(
             ProjectDailyReport.project_id == project_id,
             ProjectDailyReport.report_date == day,
+            ProjectDailyReport.user_id == current_user.id,
         )
         .one_or_none()
     )
@@ -208,6 +210,7 @@ def save_daily_feedback(
         report = ProjectDailyReport(
             team_id=team_id,
             project_id=project_id,
+            user_id=current_user.id,
             report_date=day,
             completion_percent=body.completion_percent,
             day_note=note,

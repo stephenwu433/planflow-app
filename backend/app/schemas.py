@@ -613,6 +613,20 @@ class DailyReportSaveRequest(BaseModel):
     next_actions: str | None = Field(default=None, max_length=4000)
 
 
+class MemberDailyReportSubmission(BaseModel):
+    """One teammate's personal report for the day (owner/admin aggregate view)."""
+
+    user_id: uuid.UUID
+    display_name: str | None = None
+    email: str | None = None
+    # missing | draft | completed — content only when completed (synced)
+    status: str
+    summary_text: str | None = None
+    next_actions: str | None = None
+    completed_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
 class DailyReportResponse(BaseModel):
     view_date: date
     project_id: uuid.UUID
@@ -625,9 +639,15 @@ class DailyReportResponse(BaseModel):
     day_task_count: int
     day_logged_hours: float
     auto_summary: str
+    # Current user's personal narrative
+    user_id: uuid.UUID
     summary_text: str | None = None
     next_actions: str | None = None
+    status: str = "draft"
+    completed_at: datetime | None = None
     saved: bool = False
+    can_view_all: bool = False
+    submissions: list[MemberDailyReportSubmission] = Field(default_factory=list)
     work_items: list[DailyReportWorkItem] = Field(default_factory=list)
 
 
