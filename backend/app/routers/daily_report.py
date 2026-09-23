@@ -10,6 +10,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
+from app.assignee_sync import (
+    assignee_label,
+    heal_tasks_assignees_from_work_items,
+    load_assignee_names,
+)
 from app.auth import get_current_user
 from app.db import get_db
 from app.membership import require_team_membership
@@ -100,11 +105,15 @@ def _build_report(
         Task.sort_order.asc(), Task.created_at.asc()
     ).all()
 
-    assignee_ids = {t.assignee_user_id for t in day_tasks if t.assignee_user_id}
-    names: dict[uuid.UUID, str] = {}
-    if assignee_ids:
-        for user in db.query(User).filter(User.id.in_(assignee_ids)).all():
-            names[user.id] = user.display_name or user.email or user.clerk_user_id
+    # Prefer schedule work-item assignee when the linked Task drifted to null.
+    if heal_tasks_assignees_from_work_items(db, day_tasks):
+        db.commit()
+        for task in day_tasks:
+            db.refresh(task)
+
+    names = load_assignee_names(
+        db, {t.assignee_user_id for t in day_tasks if t.assignee_user_id}
+    )
 
     work_items = [
         DailyReportWorkItem(
@@ -112,9 +121,7 @@ def _build_report(
             title=task.title,
             status=task.status,
             assignee_user_id=task.assignee_user_id,
-            assignee_display_name=(
-                names.get(task.assignee_user_id) if task.assignee_user_id else None
-            ),
+            assignee_display_name=assignee_label(task.assignee_user_id, names),
             due_date=task.due_date,
             logged_hours=round(float(hours_by_task.get(task.id, 0.0)), 1),
             notes=notes_by_task.get(task.id, []),

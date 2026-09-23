@@ -7,6 +7,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
+from app.assignee_sync import sync_work_items_assignee_from_task
 from app.auth import get_current_user
 from app.db import get_db
 from app.membership import require_team_membership
@@ -212,8 +213,10 @@ def update_task(
             )
         task.status = new_status
 
+    assignee_changed = False
     if body.clear_assignee:
         task.assignee_user_id = None
+        assignee_changed = True
     elif body.assignee_user_id is not None:
         _validate_assignee(
             db,
@@ -223,6 +226,7 @@ def update_task(
         )
         previous = task.assignee_user_id
         task.assignee_user_id = body.assignee_user_id
+        assignee_changed = previous != body.assignee_user_id
         if (
             body.assignee_user_id != previous
             and body.assignee_user_id != current_user.id
@@ -244,6 +248,10 @@ def update_task(
         task.due_date = None
     elif body.due_date is not None:
         task.due_date = body.due_date
+
+    # Keep linked schedule work items in lockstep so schedule vs 当日任务 match.
+    if assignee_changed:
+        sync_work_items_assignee_from_task(db, task)
 
     db.commit()
     db.refresh(task)
